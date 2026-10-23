@@ -9,3 +9,7 @@ app = FastAPI(
 @app.get("/")
 def root():
     return {"message": "Welcome to Setu API"}
+        
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}
