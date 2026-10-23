@@ -8,6 +8,7 @@ from app.core.dependencies import get_db
 from app.main import app
 from app.models import Product
 
+
 Base.metadata.create_all(bind=test_engine)
 
 def override_get_db():
@@ -77,6 +78,45 @@ def test_create_product():
     assert float(data["price"]) == 499.99
     assert isinstance(data["id"], int)
 
+def test_create_product_database_failure():
+    class FakeDB:
+        def add(self, product):
+            pass
+
+        def commit(self):
+            raise RuntimeError("Simulated database failure")
+
+        def refresh(self, product):
+            pass
+
+        def rollback(self):
+            self.rollback_called = True
+
+    fake_db = FakeDB()
+    fake_db.rollback_called = False
+
+    def override_failed_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_failed_db
+
+    try:
+        response = client.post(
+            "/products/",
+            json={
+                "name": "Failure Test Product",
+                "description": "Testing database failure",
+                "price": "10.00",
+            },
+        )
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "Failed to create product"
+        }
+        assert fake_db.rollback_called is True
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
 
 def test_get_product_by_id():
     product_data = {
@@ -106,6 +146,53 @@ def test_get_product_not_found():
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Product not found"}
+
+
+def test_update_product_database_failure():
+    class FakeDB:
+        rollback_called = False
+
+        def scalar(self, statement):
+            return Product(
+                id=999,
+                name="Original Product",
+                description="Original description",
+                price="10.00",
+            )
+
+        def commit(self):
+            raise RuntimeError("Simulated database failure")
+
+        def refresh(self, product):
+            pass
+
+        def rollback(self):
+            self.rollback_called = True
+
+    fake_db = FakeDB()
+
+    def override_failed_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_failed_db
+
+    try:
+        response = client.put(
+            "/products/999",
+            json={
+                "name": "Updated Product",
+                "description": "Updated description",
+                "price": "20.00",
+            },
+        )
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "Failed to update product"
+        }
+        assert fake_db.rollback_called is True
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
 
 
 def test_update_product():
@@ -175,6 +262,46 @@ def test_patch_product():
     # Clean up the test product
     delete_response = client.delete(f"/products/{product_id}")
     assert delete_response.status_code == 204
+
+
+def test_delete_product_database_failure():
+    class FakeDB:
+        rollback_called = False
+
+        def scalar(self, statement):
+            return Product(
+                id=999,
+                name="Product to Delete",
+                description="Testing deletion failure",
+                price="10.00",
+            )
+
+        def delete(self, product):
+            pass
+
+        def commit(self):
+            raise RuntimeError("Simulated database failure")
+
+        def rollback(self):
+            self.rollback_called = True
+
+    fake_db = FakeDB()
+
+    def override_failed_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_failed_db
+
+    try:
+        response = client.delete("/products/999")
+
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "Failed to delete product"
+        }
+        assert fake_db.rollback_called is True
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
 
 
 def test_delete_product():
@@ -647,3 +774,4 @@ def test_get_products_with_limit_above_maximum():
     response = client.get("/products/?limit=101")
 
     assert response.status_code == 422
+
