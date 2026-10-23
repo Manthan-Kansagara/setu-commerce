@@ -1,9 +1,10 @@
 from decimal import Decimal
 
-from sqlalchemy import Numeric, String
+from sqlalchemy import ForeignKey, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.base import Base
+
 
 class Product(Base):
     __tablename__ = "products"
@@ -15,3 +16,9 @@ class Product(Base):
         nullable=True,
     )
     price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+
+    seller_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=False,
+        index=True,
+    )

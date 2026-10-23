@@ -23,6 +23,7 @@ import jwt
 from app.core.config import settings
 from app.core.security import create_access_token, decode_access_token
 
+Base.metadata.drop_all(bind=test_engine)
 Base.metadata.create_all(bind=test_engine)
 
 def override_get_db():
@@ -43,8 +44,8 @@ def override_database_dependency():
 def clean_products():
     def clear_database():
         with TestSessionLocal() as db:
-            db.execute(delete(User))
             db.execute(delete(Product))
+            db.execute(delete(User))
             db.commit()
 
     clear_database()
@@ -53,6 +54,7 @@ def clean_products():
 
 
 client = TestClient(app)
+
 
 
 def get_auth_headers(
@@ -66,6 +68,15 @@ def get_auth_headers(
 
     assert registration.status_code == 201
 
+    # Promote this test user to seller in the test database.
+    with TestSessionLocal() as db:
+        user = db.scalar(
+            select(User).where(User.email == email)
+        )
+        assert user is not None
+        user.role = "seller"
+        db.commit()
+
     login = client.post(
         "/auth/login",
         json={"email": email, "password": password},
@@ -75,6 +86,7 @@ def get_auth_headers(
 
     token = login.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
 
 
 def test_root():
@@ -187,6 +199,7 @@ def test_create_product_database_failure():
         email="seller@example.com",
         password_hash="test-hash",
         is_active=True,
+        role="seller",
     )
     app.dependency_overrides[get_db] = override_failed_db
 
@@ -207,6 +220,7 @@ def test_create_product_database_failure():
         assert fake_db.rollback_called is True
     finally:
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides.pop(get_current_user, None)
 
 def test_get_product_by_id():
     headers = get_auth_headers()
@@ -228,7 +242,10 @@ def test_get_product_by_id():
     assert response.json()["name"] == product_data["name"]
 
     # Clean up the test product
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(
+        f"/products/{product_id}",
+        headers=headers,
+    )
     assert delete_response.status_code == 204
 
 
@@ -249,6 +266,7 @@ def test_update_product_database_failure():
                 name="Original Product",
                 description="Original description",
                 price="10.00",
+                seller_id=1,
             )
 
         def commit(self):
@@ -265,6 +283,13 @@ def test_update_product_database_failure():
     def override_failed_db():
         yield fake_db
 
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=1,
+        email="seller@example.com",
+        password_hash="test-hash",
+        is_active=True,
+        role="seller",
+    )
     app.dependency_overrides[get_db] = override_failed_db
 
     try:
@@ -284,6 +309,7 @@ def test_update_product_database_failure():
         assert fake_db.rollback_called is True
     finally:
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_update_product():
@@ -310,6 +336,7 @@ def test_update_product():
             "description": "Updated description",
             "price": "399.99",
         },
+        headers=headers
     )
 
     assert update_response.status_code == 200
@@ -321,7 +348,10 @@ def test_update_product():
     assert float(updated_product["price"]) == 399.99
 
     # Clean up the test product
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(
+        f"/products/{product_id}",
+        headers=headers,
+    )   
     assert delete_response.status_code == 204
 
 
@@ -345,6 +375,7 @@ def test_patch_product():
     patch_response = client.patch(
         f"/products/{product_id}",
         json={"name": "Patched Product"},
+        headers=headers
     )
 
     assert patch_response.status_code == 200
@@ -355,7 +386,7 @@ def test_patch_product():
     assert float(patched_product["price"]) == 199.99
 
     # Clean up the test product
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}",headers=headers)
     assert delete_response.status_code == 204
 
 
@@ -369,6 +400,7 @@ def test_delete_product_database_failure():
                 name="Product to Delete",
                 description="Testing deletion failure",
                 price="10.00",
+                seller_id=1,
             )
 
         def delete(self, product):
@@ -385,6 +417,13 @@ def test_delete_product_database_failure():
     def override_failed_db():
         yield fake_db
 
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=1,
+        email="seller@example.com",
+        password_hash="test-hash",
+        is_active=True,
+        role="seller",
+    )
     app.dependency_overrides[get_db] = override_failed_db
 
     try:
@@ -397,6 +436,7 @@ def test_delete_product_database_failure():
         assert fake_db.rollback_called is True
     finally:
         app.dependency_overrides[get_db] = override_get_db
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_delete_product():
@@ -416,7 +456,10 @@ def test_delete_product():
     product_id = create_response.json()["id"]
 
     # Delete the product
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(
+        f"/products/{product_id}",
+        headers=headers,
+    )
     assert delete_response.status_code == 204
     assert delete_response.content == b""
 
@@ -457,7 +500,7 @@ def test_create_product_with_invalid_data():
 
 
 def test_delete_product_not_found():
-    response = client.delete("/products/999999999")
+    response = client.delete("/products/999999999", headers=get_auth_headers())
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Product not found"}
@@ -470,6 +513,7 @@ def test_update_product_not_found():
             "description": "This product does not exist",
             "price": "299.99",
         },
+        headers=get_auth_headers(),
     )
 
     assert response.status_code == 404
@@ -479,6 +523,7 @@ def test_patch_product_not_found():
     response = client.patch(
         "/products/999999999",
         json={"name": "Updated Product"},
+        headers=get_auth_headers(),
     )
 
     assert response.status_code == 404
@@ -505,12 +550,13 @@ def test_patch_product_with_empty_data():
     patch_response = client.patch(
         f"/products/{product_id}",
         json={},
+        headers=headers,
     )
 
     assert patch_response.status_code == 422
 
     # Clean up the test product
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_get_product_with_invalid_id():
@@ -519,7 +565,7 @@ def test_get_product_with_invalid_id():
     assert response.status_code == 422
 
 def test_delete_product_with_invalid_id():
-    response = client.delete("/products/abc")
+    response = client.delete("/products/abc", headers=get_auth_headers())
 
     assert response.status_code == 422
 
@@ -531,6 +577,7 @@ def test_update_product_with_invalid_id():
             "description": "Testing invalid ID",
             "price": "299.99",
         },
+        headers=get_auth_headers(),
     )
 
     assert response.status_code == 422
@@ -539,6 +586,7 @@ def test_patch_product_with_invalid_id():
     response = client.patch(
         "/products/abc",
         json={"name": "Updated Product"},
+        headers=get_auth_headers(),
     )
 
     assert response.status_code == 422
@@ -645,7 +693,7 @@ def test_create_product_without_description():
 
     # Clean up the test product
     product_id = data["id"]
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_create_product_with_zero_price():
@@ -713,7 +761,7 @@ def test_create_product_with_two_decimal_places():
 
     # Clean up the test product
     product_id = data["id"]
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_create_product_with_maximum_name_length():
@@ -736,7 +784,7 @@ def test_create_product_with_maximum_name_length():
 
     # Clean up the test product
     product_id = response.json()["id"]
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_patch_product_description_only():
@@ -759,6 +807,7 @@ def test_patch_product_description_only():
     patch_response = client.patch(
         f"/products/{product_id}",
         json={"description": "Updated description"},
+        headers=headers,
     )
 
     assert patch_response.status_code == 200
@@ -769,7 +818,7 @@ def test_patch_product_description_only():
     assert float(product["price"]) == 249.99
 
     # Clean up
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_patch_product_price_only():
@@ -792,6 +841,7 @@ def test_patch_product_price_only():
     patch_response = client.patch(
         f"/products/{product_id}",
         json={"price": "349.99"},
+        headers=headers,
     )
 
     assert patch_response.status_code == 200
@@ -802,7 +852,7 @@ def test_patch_product_price_only():
     assert float(product["price"]) == 349.99
 
     # Clean up
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_patch_product_with_null_name():
@@ -825,12 +875,13 @@ def test_patch_product_with_null_name():
     patch_response = client.patch(
         f"/products/{product_id}",
         json={"name": None},
+        headers=headers,
     )
 
     assert patch_response.status_code == 422
 
     # Clean up
-    delete_response = client.delete(f"/products/{product_id}")
+    delete_response = client.delete(f"/products/{product_id}", headers=headers)
     assert delete_response.status_code == 204
 
 def test_get_products_with_invalid_limit():
@@ -973,6 +1024,7 @@ def test_user_response_excludes_password_hash():
         id=1,
         email="buyer@example.com",
         is_active=True,
+        role="customer"
     )
 
     assert "password" not in user.model_dump()
@@ -994,6 +1046,7 @@ def test_register_user_success():
     assert data["is_active"] is True
     assert "password_hash" not in data
     assert "password" not in data
+    assert response.json()["role"] == "customer"
 
 
 def test_register_duplicate_email():
@@ -1202,3 +1255,42 @@ def test_get_current_user_with_nonexistent_user():
             )
 
     assert exc_info.value.status_code == 401
+
+
+from app.core.auth import require_role
+from fastapi import HTTPException
+
+
+def test_require_role_rejects_customer():
+    checker = require_role("seller", "admin")
+
+    with pytest.raises(HTTPException) as exc_info:
+        checker(current_user=User(
+            id=1,
+            email="customer@example.com",
+            password_hash="hashed-password",
+            is_active=True,
+            role="customer",
+        ))
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "You do not have permission to perform this action"
+    )
+
+def test_require_role_allows_seller():
+    checker = require_role("seller", "admin")
+
+    seller = User(
+        id=2,
+        email="seller@example.com",
+        password_hash="hashed-password",
+        is_active=True,
+        role="seller",
+    )
+
+    result = checker(current_user=seller)
+
+    assert result is seller
+
+    

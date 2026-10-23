@@ -8,13 +8,16 @@ class ProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=1000)
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+    model_config = ConfigDict(extra="forbid")
 
 class ProductResponse(BaseModel):
     id: int
     name: str
     description: str | None
     price: Decimal
+    seller_id: int | None
 
+    model_config = ConfigDict(extra="forbid")
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -22,6 +25,8 @@ class ProductUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=1000)
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 

@@ -15,7 +15,7 @@ from app.schemas.product import (
 )
 
 from app.routers.auth import router as auth_router
-from app.core.auth import get_current_user
+from app.core.auth import get_current_user, require_role
 from app.models import User
 
 app = FastAPI(
@@ -52,10 +52,12 @@ def get_products(
 def create_product(
     product_data: ProductCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role("seller", "admin"))
 ):
-    product = Product(**product_data.model_dump())
-
+    product = Product(
+        **product_data.model_dump(),
+        seller_id=current_user.id,
+    )
     try:
         db.add(product)
         db.commit()
@@ -93,6 +95,7 @@ def update_product(
     product_id: int,
     product_data: ProductUpdate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("seller", "admin")),
 ):
     statement = select(Product).where(Product.id == product_id)
     product = db.scalar(statement)
@@ -102,7 +105,11 @@ def update_product(
             status_code=404,
             detail="Product not found",
         )
-
+    if current_user.role != "admin" and product.seller_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to modify this product",
+        )
     try:
         product.name = product_data.name
         product.description = product_data.description
@@ -125,6 +132,7 @@ def patch_product(
     product_id: int,
     product_data: ProductPatch,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("seller", "admin")),
 ):
     statement = select(Product).where(Product.id == product_id)
     product = db.scalar(statement)
@@ -134,7 +142,11 @@ def patch_product(
             status_code=404,
             detail="Product not found",
         )
-
+    if current_user.role != "admin" and product.seller_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to modify this product",
+        )
     try:
         update_data = product_data.model_dump(exclude_unset=True)
 
@@ -157,6 +169,7 @@ def patch_product(
 def delete_product(
     product_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("seller", "admin")),
 ):
     statement = select(Product).where(Product.id == product_id)
     product = db.scalar(statement)
@@ -165,6 +178,11 @@ def delete_product(
         raise HTTPException(
             status_code=404,
             detail="Product not found",
+        )
+    if current_user.role != "admin" and product.seller_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have permission to modify this product",
         )
 
     try:

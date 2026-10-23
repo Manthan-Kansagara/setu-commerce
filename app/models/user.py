@@ -24,3 +24,8 @@ class User(Base):
         default=True,
         nullable=False,
     )
+    role: Mapped[str] = mapped_column(
+        String(20),
+        default="customer",
+        nullable=False,
+    )
