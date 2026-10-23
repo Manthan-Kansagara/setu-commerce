@@ -14,12 +14,15 @@ from app.schemas.product import (
     ProductUpdate,
 )
 
+from app.routers.auth import router as auth_router
+
 app = FastAPI(
     title=f"{settings.APP_NAME} API",
     description="E-commerce marketplace backend",
     version="0.1.0",
     debug=settings.DEBUG,
 )
+app.include_router(auth_router)
 
 @app.get("/")
 def root():

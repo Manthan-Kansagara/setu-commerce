@@ -6,8 +6,11 @@ from app.core.base import Base
 from app.core.database import TestSessionLocal, test_engine
 from app.core.dependencies import get_db
 from app.main import app
-from app.models import Product
+from app.models import Product, User
 
+from app.core.security import hash_password, verify_password
+from pydantic import ValidationError
+from app.schemas.user import UserCreate, UserResponse
 
 Base.metadata.create_all(bind=test_engine)
 
@@ -24,16 +27,19 @@ def override_database_dependency():
     yield
     app.dependency_overrides.clear()
 
+
 @pytest.fixture(autouse=True)
 def clean_products():
-    def clear_products():
+    def clear_database():
         with TestSessionLocal() as db:
+            db.execute(delete(User))
             db.execute(delete(Product))
             db.commit()
 
-    clear_products()
+    clear_database()
     yield
-    clear_products()
+    clear_database()
+
 
 client = TestClient(app)
 
@@ -818,3 +824,110 @@ def test_get_products_with_limit_above_maximum():
 
     assert response.status_code == 422
 
+
+def test_hash_password():
+    password = "SetuSecure123!"
+
+    hashed_password = hash_password(password)
+
+    assert hashed_password != password
+    assert hashed_password.startswith("$argon2id$")
+
+
+def test_verify_password():
+    password = "SetuSecure123!"
+    hashed_password = hash_password(password)
+
+    assert verify_password(password, hashed_password) is True
+    assert verify_password("WrongPassword123!", hashed_password) is False
+
+
+def test_user_create_valid_data():
+    user = UserCreate(
+        email="buyer@example.com",
+        password="SetuSecure123!",
+    )
+
+    assert user.email == "buyer@example.com"
+    assert user.password == "SetuSecure123!"
+
+
+def test_user_create_invalid_email():
+    with pytest.raises(ValidationError):
+        UserCreate(
+            email="not-an-email",
+            password="SetuSecure123!",
+        )
+
+
+def test_user_create_short_password():
+    with pytest.raises(ValidationError):
+        UserCreate(
+            email="buyer@example.com",
+            password="short",
+        )
+
+
+def test_user_response_excludes_password_hash():
+    user = UserResponse(
+        id=1,
+        email="buyer@example.com",
+        is_active=True,
+    )
+
+    assert "password" not in user.model_dump()
+    assert "password_hash" not in user.model_dump()
+
+
+def test_register_user_success():
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "newbuyer@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["email"] == "newbuyer@example.com"
+    assert data["is_active"] is True
+    assert "password_hash" not in data
+    assert "password" not in data
+
+
+def test_register_duplicate_email():
+    payload = {
+        "email": "duplicate@example.com",
+        "password": "SecurePass123!",
+    }
+
+    first_response = client.post("/auth/register", json=payload)
+    second_response = client.post("/auth/register", json=payload)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+
+
+def test_register_invalid_email():
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "not-an-email",
+            "password": "SecurePass123!",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_register_short_password():
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "buyer2@example.com",
+            "password": "short",
+        },
+    )
+
+    assert response.status_code == 422
