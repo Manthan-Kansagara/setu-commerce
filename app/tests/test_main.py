@@ -1294,3 +1294,143 @@ def test_require_role_allows_seller():
     assert result is seller
 
     
+
+# Phase 6 hardening regression tests
+
+def get_admin_headers(
+    email: str = "admin@example.com",
+    password: str = "SecurePass123!",
+) -> dict[str, str]:
+    registration = client.post(
+        "/auth/register",
+        json={"email": email, "password": password},
+    )
+    assert registration.status_code == 201
+
+    with TestSessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        user.role = "admin"
+        db.commit()
+
+    login = client.post(
+        "/auth/login",
+        json={"email": email, "password": password},
+    )
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+@pytest.mark.parametrize("method,payload", [
+    ("put", {"name": "Changed", "description": "Changed", "price": "25.00"}),
+    ("patch", {"name": "Changed"}),
+    ("delete", None),
+])
+def test_seller_cannot_modify_another_sellers_product(method, payload):
+    owner_headers = get_auth_headers("owner@example.com")
+    other_seller_headers = get_auth_headers("other-seller@example.com")
+
+    created = client.post(
+        "/products/",
+        json={"name": "Owner product", "description": "Original", "price": "10.00"},
+        headers=owner_headers,
+    )
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+
+    response = getattr(client, method)(
+        f"/products/{product_id}",
+        headers=other_seller_headers,
+        **({"json": payload} if payload is not None else {}),
+    )
+    assert response.status_code == 403
+
+    # The owner can still delete the product during cleanup.
+    cleanup = client.delete(f"/products/{product_id}", headers=owner_headers)
+    assert cleanup.status_code == 204
+
+
+def test_admin_can_manage_another_sellers_product():
+    seller_headers = get_auth_headers("product-owner@example.com")
+    admin_headers = get_admin_headers()
+
+    created = client.post(
+        "/products/",
+        json={"name": "Seller product", "description": "Original", "price": "10.00"},
+        headers=seller_headers,
+    )
+    assert created.status_code == 201
+    product_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/products/{product_id}",
+        json={"name": "Admin updated product"},
+        headers=admin_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["name"] == "Admin updated product"
+
+    deleted = client.delete(f"/products/{product_id}", headers=admin_headers)
+    assert deleted.status_code == 204
+
+
+def test_seller_cannot_modify_legacy_product_without_owner():
+    seller_headers = get_auth_headers("legacy-test-seller@example.com")
+    with TestSessionLocal() as db:
+        legacy_product = Product(
+            name="Legacy product",
+            description="No owner assigned",
+            price="12.00",
+            seller_id=None,
+        )
+        db.add(legacy_product)
+        db.commit()
+        db.refresh(legacy_product)
+        product_id = legacy_product.id
+
+    response = client.patch(
+        f"/products/{product_id}",
+        json={"name": "Seller should not change this"},
+        headers=seller_headers,
+    )
+    assert response.status_code == 403
+
+
+def test_admin_can_manage_legacy_product_without_owner():
+    admin_headers = get_admin_headers("legacy-admin@example.com")
+    with TestSessionLocal() as db:
+        legacy_product = Product(
+            name="Legacy product for admin",
+            description="No owner assigned",
+            price="12.00",
+            seller_id=None,
+        )
+        db.add(legacy_product)
+        db.commit()
+        db.refresh(legacy_product)
+        product_id = legacy_product.id
+
+    response = client.patch(
+        f"/products/{product_id}",
+        json={"name": "Admin updated legacy product"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == "Admin updated legacy product"
+
+
+def test_public_registration_cannot_self_assign_admin_role():
+    response = client.post(
+        "/auth/register",
+        json={
+            "email": "self-promote@example.com",
+            "password": "SecurePass123!",
+            "role": "admin",
+        },
+    )
+    assert response.status_code == 201
+
+    with TestSessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == "self-promote@example.com"))
+        assert user is not None
+        assert user.role == "customer"
