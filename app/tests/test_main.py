@@ -1,11 +1,41 @@
+import pytest
 
 from fastapi.testclient import TestClient
-
+from app.core.base import Base
+from app.core.database import test_engine
 from app.core.config import settings
 from app.main import app
 
-client = TestClient(app)
+from app.core.database import TestSessionLocal
+from app.core.dependencies import get_db
 
+from sqlalchemy import delete
+from app.models import Product
+
+Base.metadata.create_all(bind=test_engine)
+
+def override_get_db():
+    db = TestSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+
+@pytest.fixture(autouse=True)
+def clean_products():
+    with TestSessionLocal() as db:
+        db.execute(delete(Product))
+        db.commit()
+
+    yield
+
+    with TestSessionLocal() as db:
+        db.execute(delete(Product))
+        db.commit()
+
+client = TestClient(app)
 
 def test_root():
     response = client.get("/")

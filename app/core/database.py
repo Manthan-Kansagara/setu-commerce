@@ -15,3 +15,14 @@ SessionLocal = sessionmaker(
     autoflush=False,
     autocommit=False,
 )
+
+test_engine = create_engine(
+    settings.TEST_DATABASE_URL,
+    pool_pre_ping=True,
+)
+
+TestSessionLocal = sessionmaker(
+    bind=test_engine,
+    autoflush=False,
+    autocommit=False,
+)
