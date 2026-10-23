@@ -78,6 +78,49 @@ def test_create_product():
     assert float(data["price"]) == 499.99
     assert isinstance(data["id"], int)
 
+
+def test_get_product_database_failure():
+    class FakeDB:
+        def scalar(self, statement):
+            raise RuntimeError("Simulated database query failure")
+
+    fake_db = FakeDB()
+
+    def override_failed_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_failed_db
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = test_client.get("/products/999")
+
+        assert response.status_code == 500
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
+
+
+def test_get_products_database_failure():
+    class FakeDB:
+        def scalars(self, statement):
+            raise RuntimeError("Simulated database query failure")
+
+    fake_db = FakeDB()
+
+    def override_failed_db():
+        yield fake_db
+
+    app.dependency_overrides[get_db] = override_failed_db
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = test_client.get("/products/")
+
+        assert response.status_code == 500
+    finally:
+        app.dependency_overrides[get_db] = override_get_db
+
+
 def test_create_product_database_failure():
     class FakeDB:
         def add(self, product):
