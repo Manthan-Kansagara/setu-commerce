@@ -141,3 +141,28 @@ def patch_product(
         )
 
     return product
+
+
+@app.delete("/products/{product_id}", status_code=204)
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+):
+    statement = select(Product).where(Product.id == product_id)
+    product = db.scalar(statement)
+
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    try:
+        db.delete(product)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete product",
+        )
