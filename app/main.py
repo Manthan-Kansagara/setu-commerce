@@ -6,7 +6,13 @@ from app.core.config import settings
 from app.core.dependencies import get_db
 from app.models import Product
 from app.schemas.product import ProductResponse
-from app.schemas.product import ProductCreate, ProductResponse
+
+from app.schemas.product import (
+    ProductCreate,
+    ProductPatch,
+    ProductResponse,
+    ProductUpdate,
+)
 
 app = FastAPI(
     title=f"{settings.APP_NAME} API",
@@ -67,6 +73,71 @@ def get_product(
         raise HTTPException(
             status_code=404,
             detail="Product not found",
+        )
+
+    return product
+
+
+@app.put("/products/{product_id}", response_model=ProductResponse)
+def update_product(
+    product_id: int,
+    product_data: ProductUpdate,
+    db: Session = Depends(get_db),
+):
+    statement = select(Product).where(Product.id == product_id)
+    product = db.scalar(statement)
+
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    try:
+        product.name = product_data.name
+        product.description = product_data.description
+        product.price = product_data.price
+
+        db.commit()
+        db.refresh(product)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update product",
+        )
+
+    return product
+
+
+@app.patch("/products/{product_id}", response_model=ProductResponse)
+def patch_product(
+    product_id: int,
+    product_data: ProductPatch,
+    db: Session = Depends(get_db),
+):
+    statement = select(Product).where(Product.id == product_id)
+    product = db.scalar(statement)
+
+    if product is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Product not found",
+        )
+
+    try:
+        update_data = product_data.model_dump(exclude_unset=True)
+
+        for field, value in update_data.items():
+            setattr(product, field, value)
+
+        db.commit()
+        db.refresh(product)
+    except Exception:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update product",
         )
 
     return product
