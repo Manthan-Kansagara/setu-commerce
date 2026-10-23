@@ -15,6 +15,8 @@ from app.schemas.product import (
 )
 
 from app.routers.auth import router as auth_router
+from app.core.auth import get_current_user
+from app.models import User
 
 app = FastAPI(
     title=f"{settings.APP_NAME} API",
@@ -45,10 +47,12 @@ def get_products(
     return products
 
 
+
 @app.post("/products/", response_model=ProductResponse, status_code=201)
 def create_product(
     product_data: ProductCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     product = Product(**product_data.model_dump())
 
@@ -64,6 +68,7 @@ def create_product(
         )
 
     return product
+
 
 
 @app.get("/products/{product_id}", response_model=ProductResponse)

@@ -9,6 +9,9 @@ from app.core.security import hash_password
 from app.models import User
 from app.schemas.user import UserCreate, UserResponse
 
+from app.core.security import verify_password, create_access_token
+from app.schemas.user import UserLogin
+
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
@@ -53,3 +56,35 @@ def register_user(
         )
 
     return user
+
+
+@router.post("/login")
+def login_user(
+    user_data: UserLogin,
+    db: Session = Depends(get_db),
+):
+    statement = select(User).where(User.email == user_data.email)
+    user = db.scalar(statement)
+
+    if user is None or not verify_password(
+        user_data.password,
+        user.password_hash,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is inactive",
+        )
+
+    access_token = create_access_token(subject=str(user.id))
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+    }

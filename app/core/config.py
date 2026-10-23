@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     APP_ENV: str = "development"
     DEBUG: bool = True
 
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    
     DATABASE_URL: str
     TEST_DATABASE_URL: str
 

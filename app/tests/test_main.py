@@ -8,9 +8,20 @@ from app.core.dependencies import get_db
 from app.main import app
 from app.models import Product, User
 
+from sqlalchemy import select
+
+from app.core.auth import get_current_user
+from app.core.security import create_access_token
+
 from app.core.security import hash_password, verify_password
 from pydantic import ValidationError
 from app.schemas.user import UserCreate, UserResponse
+
+
+from datetime import timedelta
+import jwt
+from app.core.config import settings
+from app.core.security import create_access_token, decode_access_token
 
 Base.metadata.create_all(bind=test_engine)
 
@@ -43,6 +54,29 @@ def clean_products():
 
 client = TestClient(app)
 
+
+def get_auth_headers(
+    email: str = "seller@example.com",
+    password: str = "SecurePass123!",
+) -> dict[str, str]:
+    registration = client.post(
+        "/auth/register",
+        json={"email": email, "password": password},
+    )
+
+    assert registration.status_code == 201
+
+    login = client.post(
+        "/auth/login",
+        json={"email": email, "password": password},
+    )
+
+    assert login.status_code == 200
+
+    token = login.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_root():
     response = client.get("/")
 
@@ -74,7 +108,7 @@ def test_create_product():
         "price": "499.99",
     }
 
-    response = client.post("/products/", json=product_data)
+    response = client.post("/products/", json=product_data, headers=get_auth_headers())
 
     assert response.status_code == 201
 
@@ -128,6 +162,7 @@ def test_get_products_database_failure():
 
 
 def test_create_product_database_failure():
+    
     class FakeDB:
         def add(self, product):
             pass
@@ -147,6 +182,12 @@ def test_create_product_database_failure():
     def override_failed_db():
         yield fake_db
 
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=1,
+        email="seller@example.com",
+        password_hash="test-hash",
+        is_active=True,
+    )
     app.dependency_overrides[get_db] = override_failed_db
 
     try:
@@ -168,13 +209,14 @@ def test_create_product_database_failure():
         app.dependency_overrides[get_db] = override_get_db
 
 def test_get_product_by_id():
+    headers = get_auth_headers()
     product_data = {
         "name": "Product Retrieval Test",
         "description": "Testing retrieval by ID",
         "price": "299.99",
     }
 
-    create_response = client.post("/products/", json=product_data)
+    create_response = client.post("/products/", json=product_data,headers=headers)
     assert create_response.status_code == 201
 
     product_id = create_response.json()["id"]
@@ -246,6 +288,7 @@ def test_update_product_database_failure():
 
 def test_update_product():
     # Create a product
+    headers = get_auth_headers()
     create_response = client.post(
         "/products/",
         json={
@@ -253,6 +296,7 @@ def test_update_product():
             "description": "Original description",
             "price": "199.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -283,6 +327,7 @@ def test_update_product():
 
 def test_patch_product():
     # Create a product
+    headers = get_auth_headers()
     create_response = client.post(
         "/products/",
         json={
@@ -290,6 +335,7 @@ def test_patch_product():
             "description": "Keep this description",
             "price": "199.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -354,6 +400,7 @@ def test_delete_product_database_failure():
 
 
 def test_delete_product():
+    headers = get_auth_headers()
     # Create a product
     create_response = client.post(
         "/products/",
@@ -362,6 +409,7 @@ def test_delete_product():
             "description": "Temporary test product",
             "price": "149.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -377,29 +425,36 @@ def test_delete_product():
     assert get_response.status_code == 404
     assert get_response.json() == {"detail": "Product not found"}
 
-
 def test_create_product_with_invalid_data():
+    headers = get_auth_headers()
+
     invalid_products = [
-        {
-            "name": "Invalid Price",
-            "description": "Price must be positive",
-            "price": "-10.00",
-        },
-        {
-            "name": "",
-            "description": "Name must not be empty",
-            "price": "100.00",
-        },
-        {
-            "name": "Invalid Precision",
-            "description": "Price has too many decimal places",
-            "price": "10.999",
-        },
+           {
+               "name": "Invalid Price",
+               "description": "Price must be positive",
+               "price": "-10.00",
+           },
+           {
+               "name": "",
+               "description": "Name must not be empty",
+               "price": "100.00",
+           },
+           {
+               "name": "Invalid Precision",
+               "description": "Price has too many decimal places",
+               "price": "10.999",
+           },
     ]
 
     for product_data in invalid_products:
-        response = client.post("/products/", json=product_data)
+        response = client.post(
+            "/products/",
+            json=product_data,
+            headers=headers,
+        )
         assert response.status_code == 422
+
+
 
 def test_delete_product_not_found():
     response = client.delete("/products/999999999")
@@ -431,6 +486,7 @@ def test_patch_product_not_found():
 
 
 def test_patch_product_with_empty_data():
+    headers = get_auth_headers()
     # Create a product
     create_response = client.post(
         "/products/",
@@ -439,6 +495,7 @@ def test_patch_product_with_empty_data():
             "description": "Testing empty PATCH data",
             "price": "199.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -487,45 +544,64 @@ def test_patch_product_with_invalid_id():
     assert response.status_code == 422
 
 def test_create_product_missing_required_field():
+    headers = get_auth_headers()
+
     response = client.post(
         "/products/",
         json={
             "name": "Incomplete Product",
             "description": "Price is missing",
         },
+        headers=headers,
     )
 
     assert response.status_code == 422
 
 def test_create_product_missing_name():
+    headers = get_auth_headers()
+
     response = client.post(
         "/products/",
         json={
             "description": "Name is missing",
             "price": "199.99",
         },
+        headers=headers,
     )
 
     assert response.status_code == 422
 
 def test_create_product_with_empty_data():
-    response = client.post("/products/", json={})
+    headers = get_auth_headers()
+
+    response = client.post(
+        "/products/",
+        json={},
+        headers=headers,
+    )
 
     assert response.status_code == 422
 
 def test_create_product_with_long_name():
+    headers = get_auth_headers()
+
     product_data = {
         "name": "A" * 151,
         "description": "Testing maximum name length",
         "price": "199.99",
     }
 
-    response = client.post("/products/", json=product_data)
+    response = client.post(
+        "/products/",
+        json=product_data,
+        headers=headers,
+    )
 
     assert response.status_code == 422
 
 
 def test_create_product_with_empty_name():
+    headers = get_auth_headers()
     response = client.post(
         "/products/",
         json={
@@ -533,28 +609,32 @@ def test_create_product_with_empty_name():
             "description": "Testing empty product name",
             "price": "199.99",
         },
+        headers=headers
     )
 
     assert response.status_code == 422
 
 def test_create_product_with_long_description():
+    headers = get_auth_headers()
     product_data = {
         "name": "Description Length Test",
         "description": "A" * 1001,
         "price": "199.99",
     }
 
-    response = client.post("/products/", json=product_data)
+    response = client.post("/products/", json=product_data,headers=headers)
 
     assert response.status_code == 422
 
 def test_create_product_without_description():
+    headers = get_auth_headers()
     response = client.post(
         "/products/",
         json={
             "name": "Product Without Description",
             "price": "99.99",
         },
+        headers=headers
     )
 
     assert response.status_code == 201
@@ -569,6 +649,7 @@ def test_create_product_without_description():
     assert delete_response.status_code == 204
 
 def test_create_product_with_zero_price():
+    headers = get_auth_headers()
     response = client.post(
         "/products/",
         json={
@@ -576,11 +657,14 @@ def test_create_product_with_zero_price():
             "description": "Testing zero price validation",
             "price": "0.00",
         },
+        headers=headers
     )
 
     assert response.status_code == 422
 
 def test_create_product_with_negative_price():
+    headers = get_auth_headers()
+
     response = client.post(
         "/products/",
         json={
@@ -588,11 +672,14 @@ def test_create_product_with_negative_price():
             "description": "Testing negative price validation",
             "price": "-10.00",
         },
+        headers=headers
     )
 
     assert response.status_code == 422
 
 def test_create_product_with_excessively_large_price():
+    headers = get_auth_headers()
+
     response = client.post(
         "/products/",
         json={
@@ -600,11 +687,14 @@ def test_create_product_with_excessively_large_price():
             "description": "Testing maximum price digits",
             "price": "123456789.99",
         },
+        headers=headers
     )
 
     assert response.status_code == 422
 
 def test_create_product_with_two_decimal_places():
+    headers = get_auth_headers()
+
     response = client.post(
         "/products/",
         json={
@@ -612,6 +702,7 @@ def test_create_product_with_two_decimal_places():
             "description": "Testing valid decimal precision",
             "price": "99.99",
         },
+        headers=headers
     )
 
     assert response.status_code == 201
@@ -626,6 +717,8 @@ def test_create_product_with_two_decimal_places():
     assert delete_response.status_code == 204
 
 def test_create_product_with_maximum_name_length():
+    headers = get_auth_headers()
+
     product_name = "A" * 150
 
     response = client.post(
@@ -635,6 +728,7 @@ def test_create_product_with_maximum_name_length():
             "description": "Testing maximum valid name length",
             "price": "199.99",
         },
+        headers=headers
     )
 
     assert response.status_code == 201
@@ -646,6 +740,7 @@ def test_create_product_with_maximum_name_length():
     assert delete_response.status_code == 204
 
 def test_patch_product_description_only():
+    headers = get_auth_headers()
     # Create a product
     create_response = client.post(
         "/products/",
@@ -654,6 +749,7 @@ def test_patch_product_description_only():
             "description": "Original description",
             "price": "249.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -677,6 +773,7 @@ def test_patch_product_description_only():
     assert delete_response.status_code == 204
 
 def test_patch_product_price_only():
+    headers = get_auth_headers()
     # Create a product
     create_response = client.post(
         "/products/",
@@ -685,6 +782,7 @@ def test_patch_product_price_only():
             "description": "Keep this description",
             "price": "199.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -708,6 +806,7 @@ def test_patch_product_price_only():
     assert delete_response.status_code == 204
 
 def test_patch_product_with_null_name():
+    headers = get_auth_headers()
     # Create a product
     create_response = client.post(
         "/products/",
@@ -716,6 +815,7 @@ def test_patch_product_with_null_name():
             "description": "Testing null name",
             "price": "199.99",
         },
+        headers=headers
     )
     assert create_response.status_code == 201
 
@@ -931,3 +1031,174 @@ def test_register_short_password():
     )
 
     assert response.status_code == 422
+
+
+def test_create_and_decode_access_token():
+    token = create_access_token(subject="123")
+    payload = decode_access_token(token)
+
+    assert payload["sub"] == "123"
+    assert "exp" in payload
+
+
+def test_decode_expired_access_token():
+    token = create_access_token(
+        subject="123",
+        expires_delta=timedelta(seconds=-1),
+    )
+
+    with pytest.raises(jwt.ExpiredSignatureError):
+        decode_access_token(token)
+
+
+def test_decode_access_token_with_invalid_signature():
+    token = create_access_token(subject="123")
+    tampered_token = token[:-1] + ("a" if token[-1] != "a" else "b")
+
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_access_token(tampered_token)
+
+def test_login_success():
+    registration = client.post(
+        "/auth/register",
+        json={
+            "email": "loginbuyer@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+    assert registration.status_code == 201
+
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "loginbuyer@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["token_type"] == "bearer"
+    assert "access_token" in data
+    assert data["access_token"]
+
+
+def test_login_wrong_password():
+    client.post(
+        "/auth/register",
+        json={
+            "email": "wrongpass@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "wrongpass@example.com",
+            "password": "IncorrectPass123!",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+
+
+def test_login_unknown_email():
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "unknown@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password"
+
+
+def test_login_inactive_user():
+    registration = client.post(
+        "/auth/register",
+        json={
+            "email": "inactive@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+    assert registration.status_code == 201
+
+    # Disable the account in the isolated test database.
+    with TestSessionLocal() as db:
+        user = db.scalar(
+            select(User).where(User.email == "inactive@example.com")
+        )
+        assert user is not None
+        user.is_active = False
+        db.commit()
+
+    response = client.post(
+        "/auth/login",
+        json={
+            "email": "inactive@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Account is inactive"
+
+
+def test_get_current_user_with_valid_token():
+    registration = client.post(
+        "/auth/register",
+        json={
+            "email": "currentuser@example.com",
+            "password": "SecurePass123!",
+        },
+    )
+    assert registration.status_code == 201
+
+    with TestSessionLocal() as db:
+        user = db.scalar(
+            select(User).where(User.email == "currentuser@example.com")
+        )
+        assert user is not None
+        user_id = user.id
+
+    token = create_access_token(subject=str(user_id))
+
+    with TestSessionLocal() as db:
+        current_user = get_current_user(
+            token=token,
+            db=db,
+        )
+        assert current_user.id == user_id
+        assert current_user.email == "currentuser@example.com"
+
+
+def test_get_current_user_with_invalid_token():
+    from fastapi import HTTPException
+
+    with TestSessionLocal() as db:
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_user(
+                token="this-is-not-a-valid-token",
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 401
+
+
+def test_get_current_user_with_nonexistent_user():
+    from fastapi import HTTPException
+
+    token = create_access_token(subject="999999999")
+
+    with TestSessionLocal() as db:
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_user(
+                token=token,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 401
