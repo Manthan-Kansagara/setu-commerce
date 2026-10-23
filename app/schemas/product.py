@@ -24,9 +24,17 @@ class ProductUpdate(BaseModel):
     price: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
 
 
+
 class ProductPatch(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=150)
-    description: str | None = Field(default=None, max_length=1000)
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=150,
+    )
+    description: str | None = Field(
+        default=None,
+        max_length=1000,
+    )
     price: Decimal | None = Field(
         default=None,
         gt=0,
@@ -37,7 +45,12 @@ class ProductPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
-    def check_at_least_one_field(self):
+    def validate_patch_fields(self):
         if not self.model_fields_set:
             raise ValueError("At least one field must be provided")
+
+        for field in ("name", "price"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null")
+
         return self
