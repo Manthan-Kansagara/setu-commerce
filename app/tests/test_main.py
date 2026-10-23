@@ -562,3 +562,59 @@ def test_get_products_with_negative_limit():
     response = client.get("/products/?limit=-5")
 
     assert response.status_code == 422
+
+def test_get_products_with_large_skip():
+    response = client.get("/products/?skip=10000&limit=20")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_get_products_with_maximum_limit():
+    response = client.get("/products/?limit=100")
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 100
+
+
+def test_get_products_with_negative_skip_and_limit():
+    response = client.get("/products/?skip=-1&limit=-5")
+
+    assert response.status_code == 422
+
+def test_get_products_returns_json():
+    response = client.get("/products/")
+
+    assert response.status_code == 200
+    assert "application/json" in response.headers["content-type"]
+
+
+def test_get_products_with_limit_one():
+    response = client.get("/products/?limit=1")
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 1
+
+
+def test_get_products_with_skip_and_limit():
+    response = client.get("/products/?skip=1&limit=2")
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 2
+
+def test_get_products_with_non_integer_skip():
+    response = client.get("/products/?skip=abc")
+
+    assert response.status_code == 422
+
+
+def test_get_products_with_non_integer_limit():
+    response = client.get("/products/?limit=abc")
+
+    assert response.status_code == 422
+
+
+def test_get_products_with_limit_above_maximum():
+    response = client.get("/products/?limit=101")
+
+    assert response.status_code == 422
