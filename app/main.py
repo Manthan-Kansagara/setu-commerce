@@ -1,4 +1,4 @@
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,12 +32,14 @@ def health_check():
 
 
 @app.get("/products/", response_model=list[ProductResponse])
-def get_products(db: Session = Depends(get_db)):
-    statement = select(Product)
+def get_products(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    statement = select(Product).offset(skip).limit(limit)
     products = db.scalars(statement).all()
-
     return products
-
 
 
 @app.post("/products/", response_model=ProductResponse, status_code=201)
@@ -166,3 +168,4 @@ def delete_product(
             status_code=500,
             detail="Failed to delete product",
         )
+

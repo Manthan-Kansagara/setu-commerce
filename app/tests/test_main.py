@@ -24,10 +24,11 @@ def test_health_check():
 
 
 def test_get_products():
-    response = client.get("/products/")
+    response = client.get("/products/?skip=0&limit=2")
 
     assert response.status_code == 200
     assert isinstance(response.json(), list)
+    assert len(response.json()) <= 2
 
 
 def test_create_product():
@@ -526,3 +527,38 @@ def test_patch_product_with_null_name():
     # Clean up
     delete_response = client.delete(f"/products/{product_id}")
     assert delete_response.status_code == 204
+
+def test_get_products_with_invalid_limit():
+    response = client.get("/products/?limit=101")
+
+    assert response.status_code == 422
+
+def test_get_products_with_negative_skip():
+    response = client.get("/products/?skip=-1")
+
+    assert response.status_code == 422
+
+def test_get_products_with_zero_skip():
+    response = client.get("/products/?skip=0&limit=2")
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 2
+
+
+def test_get_products_with_minimum_limit():
+    response = client.get("/products/?limit=1")
+
+    assert response.status_code == 200
+    assert len(response.json()) <= 1
+
+
+def test_get_products_with_zero_limit():
+    response = client.get("/products/?limit=0")
+
+    assert response.status_code == 422
+
+
+def test_get_products_with_negative_limit():
+    response = client.get("/products/?limit=-5")
+
+    assert response.status_code == 422
